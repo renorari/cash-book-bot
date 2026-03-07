@@ -1,0 +1,28 @@
+{
+  "name": "money-count-bot",
+  "version": "1.0.0",
+  "description": "A Simple Discord Bot to count money in a server",
+  "private": true,
+  "homepage": "https://github.com/renorari/money-count-bot#readme",
+  "bugs": {
+    "url": "https://github.com/renorari/money-count-bot/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/renorari/money-count-bot.git"
+  },
+  "license": "GPL-3.0-only",
+  "author": "Renorari",
+  "type": "module",
+  "main": "main.ts",
+  "scripts": {
+    "start": "node main.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.0.3",
+    "globals": "^17.4.0",
+    "jiti": "^2.6.1",
+    "typescript-eslint": "^8.56.1"
+  }
+}

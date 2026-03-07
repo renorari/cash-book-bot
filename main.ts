@@ -1,0 +1,4 @@
+/*
+    Money Count Bot
+*/
+
