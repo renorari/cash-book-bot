@@ -16,13 +16,30 @@
   "type": "module",
   "main": "main.ts",
   "scripts": {
-    "start": "node main.ts"
+    "start": "node main.ts",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio --browser=none"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/node": "^22.19.15",
+    "dotenv": "^17.3.1",
     "eslint": "^10.0.3",
     "globals": "^17.4.0",
     "jiti": "^2.6.1",
+    "prisma": "^7.4.2",
     "typescript-eslint": "^8.56.1"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.4.2",
+    "@prisma/client": "^7.4.2",
+    "discord.js": "^14.25.1",
+    "log4js": "^6.9.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }
