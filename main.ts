@@ -7,7 +7,8 @@ import "dotenv/config";
 
 import {
     ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, Colors, EmbedBuilder, GatewayIntentBits,
-    MessageFlags, SlashCommandBuilder, StringSelectMenuBuilder
+    type InteractionEditReplyOptions, type InteractionReplyOptions, type MessageComponentInteraction,
+    MessageFlags, type RepliableInteraction, SlashCommandBuilder, StringSelectMenuBuilder
 } from "discord.js";
 
 import { prisma } from "./utils/db.ts";
@@ -57,6 +58,52 @@ const client = new Client({
     ]
 });
 
+// ハンドラ内の rejection が error イベントとして送出されてもプロセスを落とさない
+client.on("error", (error) => {
+    logger.error(error);
+});
+
+/*
+    インタラクショントークンは初回応答までの猶予が3秒しかなく、
+    超えると Unknown interaction (10062) になる。
+    DBアクセスなど時間のかかる処理の前に必ず defer し、応答は safeRespond 経由で行う。
+*/
+async function safeDefer(interaction: RepliableInteraction, ephemeral: boolean): Promise<boolean> {
+    try {
+        await interaction.deferReply(ephemeral ? { "flags": MessageFlags.Ephemeral } : {});
+        return true;
+    } catch (error) {
+        logger.error(error);
+        return false;
+    }
+}
+
+async function safeDeferUpdate(interaction: MessageComponentInteraction): Promise<boolean> {
+    try {
+        await interaction.deferUpdate();
+        return true;
+    } catch (error) {
+        logger.error(error);
+        return false;
+    }
+}
+
+// defer 済み・未応答のどちらでも応答でき、トークン失効時もログのみで握り潰す
+async function safeRespond(interaction: RepliableInteraction, options: InteractionReplyOptions): Promise<void> {
+    try {
+        if (interaction.deferred || interaction.replied) {
+            const editOptions = { ...options };
+            // defer 時点で可視性が確定するため editReply では flags を送らない
+            delete editOptions.flags;
+            await interaction.editReply(editOptions as InteractionEditReplyOptions);
+        } else {
+            await interaction.reply(options);
+        }
+    } catch (error) {
+        logger.error(error);
+    }
+}
+
 client.on("clientReady", async () => {
     logger.info(`Logged in as ${client.user?.tag}!`);
 
@@ -69,7 +116,7 @@ client.on("interactionCreate", async (interaction) => {
 
     switch (interaction.commandName) {
         case "ping":
-            await interaction.reply({
+            await safeRespond(interaction, {
                 "content": "Pong!",
                 "embeds": [
                     new EmbedBuilder()
@@ -91,6 +138,7 @@ client.on("interactionCreate", async (interaction) => {
             });
             break;
         case "cashbook":
+            if (!(await safeDefer(interaction, false))) return;
             try {
                 const entries = await prisma.cashBook.findMany({
                     "where": { "isRemoved": false },
@@ -98,7 +146,7 @@ client.on("interactionCreate", async (interaction) => {
                 });
 
                 if (entries.length === 0) {
-                    await interaction.reply({
+                    await safeRespond(interaction, {
                         "content": "📒 金銭出納帳は空です。",
                         "flags": MessageFlags.Ephemeral
                     });
@@ -124,7 +172,7 @@ client.on("interactionCreate", async (interaction) => {
                         ])
                         .setTimestamp();
 
-                    await interaction.reply({
+                    await safeRespond(interaction, {
                         "embeds": [embed],
                         "components": [
                             new ActionRowBuilder<ButtonBuilder>()
@@ -139,7 +187,7 @@ client.on("interactionCreate", async (interaction) => {
                 }
             } catch (error) {
                 logger.error(error);
-                await interaction.reply({
+                await safeRespond(interaction, {
                     "content": "❌ 金銭出納帳の表示中にエラーが発生しました。",
                     "flags": MessageFlags.Ephemeral
                 });
@@ -150,10 +198,11 @@ client.on("interactionCreate", async (interaction) => {
             const description = interaction.options.getString("description", true);
             const amount = interaction.options.getInteger("amount", true);
 
+            if (!(await safeDefer(interaction, true))) return;
             try {
                 const date = new Date(dateStr);
                 if (isNaN(date.getTime())) {
-                    await interaction.reply({
+                    await safeRespond(interaction, {
                         "content": "❌ 不正な日付形式です。\n> 例: 2026-10-11",
                         "flags": MessageFlags.Ephemeral
                     });
@@ -176,13 +225,13 @@ client.on("interactionCreate", async (interaction) => {
                     }
                 });
 
-                await interaction.reply({
+                await safeRespond(interaction, {
                     "content": "✅ 記帳が完了しました。",
                     "flags": MessageFlags.Ephemeral
                 });
             } catch (error) {
                 logger.error(error);
-                await interaction.reply({
+                await safeRespond(interaction, {
                     "content": "❌ 記帳中にエラーが発生しました。",
                     "flags": MessageFlags.Ephemeral
                 });
@@ -190,7 +239,7 @@ client.on("interactionCreate", async (interaction) => {
             break;
         }
         default:
-            await interaction.reply({
+            await safeRespond(interaction, {
                 "content": "❌ 不明なコマンドです。\nアプリケーションの再起動をお試しください。",
                 "flags": MessageFlags.Ephemeral
             });
@@ -201,27 +250,48 @@ client.on("interactionCreate", async (interaction) => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId === "remove_entry") {
-        await interaction.reply({
-            "content": "行を削除するには、選択してください",
-            "components": [
-                new ActionRowBuilder<StringSelectMenuBuilder>()
-                    .addComponents(
-                        new StringSelectMenuBuilder()
-                            .setCustomId("select_entry_to_remove")
-                            .setPlaceholder("削除する行を選択")
-                            .setOptions(
-                                (await prisma.cashBook.findMany({
-                                    "where": { "isRemoved": false },
-                                    "orderBy": { "date": "desc" }
-                                })).map(entry => ({
-                                    "label": `${entry.date.toISOString().split("T")[0]}: ${entry.description}`,
-                                    "value": entry.id
-                                }))
-                            )
-                    )
-            ],
-            "flags": MessageFlags.Ephemeral
-        });
+        if (!(await safeDefer(interaction, true))) return;
+
+        try {
+            const entries = await prisma.cashBook.findMany({
+                "where": { "isRemoved": false },
+                "orderBy": { "date": "desc" }
+            });
+
+            if (entries.length === 0) {
+                await safeRespond(interaction, {
+                    "content": "📒 削除できる行がありません。",
+                    "flags": MessageFlags.Ephemeral
+                });
+                return;
+            }
+
+            await safeRespond(interaction, {
+                "content": "行を削除するには、選択してください",
+                "components": [
+                    new ActionRowBuilder<StringSelectMenuBuilder>()
+                        .addComponents(
+                            new StringSelectMenuBuilder()
+                                .setCustomId("select_entry_to_remove")
+                                .setPlaceholder("削除する行を選択")
+                                .setOptions(
+                                    // セレクトメニューの選択肢は最大25件
+                                    entries.slice(0, 25).map(entry => ({
+                                        "label": `${entry.date.toISOString().split("T")[0]}: ${entry.description}`,
+                                        "value": entry.id
+                                    }))
+                                )
+                        )
+                ],
+                "flags": MessageFlags.Ephemeral
+            });
+        } catch (error) {
+            logger.error(error);
+            await safeRespond(interaction, {
+                "content": "❌ 削除する行の取得中にエラーが発生しました。",
+                "flags": MessageFlags.Ephemeral
+            });
+        }
     }
 });
 
@@ -231,6 +301,7 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId === "select_entry_to_remove") {
         const entryId = interaction.values[0];
 
+        if (!(await safeDeferUpdate(interaction))) return;
         try {
             await prisma.cashBook.update({
                 "where": { "id": entryId },
@@ -245,13 +316,13 @@ client.on("interactionCreate", async (interaction) => {
                 }
             });
 
-            await interaction.update({
+            await safeRespond(interaction, {
                 "content": "✅ 行が削除されました。",
                 "components": []
             });
         } catch (error) {
             logger.error(error);
-            await interaction.update({
+            await safeRespond(interaction, {
                 "content": "❌ 行の削除中にエラーが発生しました。",
                 "components": []
             });
